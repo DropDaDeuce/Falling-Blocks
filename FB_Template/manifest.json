@@ -1,0 +1,31 @@
+﻿{
+    "format_version":  2,
+    "header":  {
+                   "name":  "FallingBlocks",
+                   "description":  "World template for the falling blocks behavior pack.",
+                   "version":  [
+                                   1,
+                                   9,
+                                   0
+                               ],
+                   "uuid":  "0fb23326-7257-4586-b94e-37aed44db030",
+                   "allow_random_seed":  true,
+                   "lock_template_options":  true,
+                   "base_game_version":  [
+                                             1,
+                                             21,
+                                             0
+                                         ]
+               },
+    "modules":  [
+                    {
+                        "version":  [
+                                        1,
+                                        9,
+                                        0
+                                    ],
+                        "type":  "world_template",
+                        "uuid":  "7023cfcd-e30f-465c-b306-4808bcaed1de"
+                    }
+                ]
+}
