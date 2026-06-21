@@ -5,7 +5,7 @@
                    "description":  "World template for the falling blocks behavior pack.",
                    "version":  [
                                    1,
-                                   9,
+                                   10,
                                    0
                                ],
                    "uuid":  "0fb23326-7257-4586-b94e-37aed44db030",
@@ -21,7 +21,7 @@
                     {
                         "version":  [
                                         1,
-                                        9,
+                                        10,
                                         0
                                     ],
                         "type":  "world_template",

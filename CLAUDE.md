@@ -1,13 +1,14 @@
 # FallingFalling — Project Notes for Claude
 
-_Last updated: v1.9.1_
+_Last updated: v1.10.0_
 
 ## Instructions
 
 Whenever changes are made to any file in FF_BP or FB_Template, the version must be bumped:
 1. Propose the new version number and confirm with Mathew before making any version changes.
 2. Update `FF_BP/manifest.json` in two places: `header.version` and `modules.version`.
-3. Update the version string in `FF_BP/scripts/main.js` (in the ff:help command output).
+3. Update the version string in `FF_BP/scripts/commands.js` (in the ff:help command output).
+4. Add an entry to `CHANGELOG.md` summarizing the change.
 
 ## What This Is
 
@@ -22,25 +23,42 @@ Core falling logic, per-player platform system, block pools, wave system, and pe
 ## File Structure
 
 ```
-Falling Blocks/
-  manifest.json        -- pack manifest, @minecraft/server 2.7.0
-  FF_BP/               -- SOURCE of truth for all script changes
+Falling Blocks/        -- repo root (git)
+  CLAUDE.md            -- this file: project notes for Claude
+  CHANGELOG.md         -- full version history
+  build_template.bat   -- packages FF_BP + FB_Template into FB_v<version>.mctemplate
+  FF_BP/               -- SOURCE of truth; behavior pack only (@minecraft/server 2.7.0)
     manifest.json
-    scripts/
-      main.js          -- core game logic
+    scripts/           -- modular ES modules (v1.10.0+); import with the .js extension
+      main.js          -- entry point: validateIds, gameTick, init/wiring, event subs
+      config.js        -- pure constants (CFG, PLATFORMS, portal/struct tunables, sets)
+      store.js         -- shared mutable runtime state (state + store objects)
+      pools.js         -- block pools + SPAWN_EGGS (pure data)
+      phase.js         -- currentDay, lootPhase, PHASE_ORDER
+      util.js          -- rand/pick/weightedPick, broadcast, setBlockFast, op/admin
+                          helpers, getDim, findLandingY, struct-surface scanners, lookups
+      persistence.js   -- PROP_* keys + all save*/load* dynamic-property functions
+      loot.js          -- LOOT_* tables, LOOT_TIERS, rollLootTier, fillChest, chests
+      platforms.js     -- platform build/gap/ensure/assign/join/tp + spawnMobsOnPlatform
+      portals.js       -- buildNetherPortalPlatform / buildEndPortalPlatform
+      structures.js    -- footprint/pity helpers, buildChallengeStructure, mob spawner
+      waves.js         -- WAVE_CATEGORIES, rollers, computeDropRate, applyWave, pickBlock
+      drops.js         -- dropBlock + stepDrops (fall animation)
+      commands.js      -- handleCommand, handleVote, giveKit
       structures/
         index.js       -- challenge-structure registry (inline data defs)
     structures/
       ff/              -- shipped .mcstructure files (namespace "ff:")
-  FB_Template/         -- world template staging folder (see Distribution below)
-  build_template.bat   -- packages FF_BP + FB_Template into .mctemplate
+  FB_Template/         -- world-template staging; behavior_packs/FF_BP is the post-build pristine copy
+  Templates/           -- archive of built FB_v<version>.mctemplate files
+  tools/               -- helper scripts (e.g. mcstructure_viewer.py)
 ```
 
-**Working folder for script changes is FF_BP.** The root `scripts/` folder is a copy and may be out of date — always edit `FF_BP/scripts/main.js`.
+**Working folder for script changes is `FF_BP/scripts/`.** As of v1.10.0 the logic is split across the modules above (smaller files also reduce the truncation/desync pain); `main.js` stays the manifest entry point and only holds init/wiring.
 
 The pack is a **behavior pack only** (no resource pack). No custom entities, no custom blocks. Everything is done via Script API, `runCommand`, and `world.structureManager` for structure placement.
 
-> **Tooling note (learned the hard way):** editing `FF_BP/scripts/main.js` with the editor file-tools and the shell in quick succession can desync and TRUNCATE the file. Pick ONE tool per file per burst of edits and verify with `node --check` + `wc -l` afterward. The shell view and editor view are usually the same underlying file but can diverge under concurrent writes. A pristine pre-session copy lives in `FB_Template/behavior_packs/FF_BP/` after any build — useful for recovery.
+> **Tooling note (learned the hard way):** editing any `FF_BP/scripts/*.js` file with the editor file-tools and the shell in quick succession can desync and TRUNCATE the file in the shell's view. Treat the editor as the source of truth, pick ONE tool per file per burst, and verify with `node --check` afterward. Seen repeatedly: a file's *first* write reads back fine in the shell, but after an overwrite/edit the shell can serve a stale/truncated snapshot — and `node --check` then reports a bogus pass on it. When in doubt, verify by editor read-back and run `node --check` on the Windows side. A pristine pre-session copy lives in `FB_Template/behavior_packs/FF_BP/` after any build, and `git` is the real backstop.
 
 ---
 
@@ -52,7 +70,7 @@ The pack is a **behavior pack only** (no resource pack). No custom entities, no 
 - `@minecraft/server` version `2.7.0`
 - Requires **Beta APIs** experiment enabled in world settings
 - World type: **Flat with void preset** (important — see Platform section)
-- Import: `world, system, BlockPermutation, ItemStack, EnchantmentTypes` (+ `PlayerPermissionLevel`); structure defs imported from `./structures/index.js`
+- Imports are per-module — each file imports only the `@minecraft/server` symbols it uses (across the pack: `world, system, BlockPermutation, ItemStack, EnchantmentTypes, EntityTypes, PlayerPermissionLevel`); structure defs come from `./structures/index.js`. Relative imports MUST include the `.js` extension.
 
 ### Key Design Decisions
 
@@ -114,7 +132,7 @@ Floating islands that spawn every 800–1600 game ticks in concentric rings arou
 
 **As of v1.8.x, structures are native `.mcstructure` files, not script-built.** The old per-file `build()` structures were removed.
 
-- **Defs live inline in `FF_BP/scripts/structures/index.js`** — an array of data objects, each `{ type, label, structureId, mobs, lootTier, minPhase?, fireproof?, baseWeight?, spawns?, chests? }`, collected as `CHALLENGE_STRUCT_DEFS` and imported by `main.js`. The three v1.9.0 optionals: `baseWeight` (relative spawn frequency + pity recovery rate, default 10 — `casco_marry` is dropped to 3 so the 64×64 hulk stops dominating); `spawns` (array of `{x,y,z}` LOCAL offsets from the `.mcstructure` MIN corner giving explicit mob footing — the proximity spawner uses them with footing validation, else falls back to the surface scan); `chests` (array of `{x,y,z, rarity?, slots?}` LOCAL offsets — multiple chests of per-chest rarity/slot-count, no surface scan; omit to keep the single auto-scanned chest). The legacy `build()/height/chestOffset` contract is still supported by the spawner for backward compatibility, but no current structure uses it.
+- **Defs live inline in `FF_BP/scripts/structures/index.js`** — an array of data objects, each `{ type, label, structureId, mobs, lootTier, minPhase?, fireproof?, baseWeight?, spawns?, chests? }`, collected as `CHALLENGE_STRUCT_DEFS` (imported by `structures.js`; also by `commands.js`/`main.js` for the command lists + ID validation). The three v1.9.0 optionals: `baseWeight` (relative spawn frequency + pity recovery rate, default 10 — `casco_marry` is dropped to 3 so the 64×64 hulk stops dominating); `spawns` (array of `{x,y,z}` LOCAL offsets from the `.mcstructure` MIN corner giving explicit mob footing — the proximity spawner uses them with footing validation, else falls back to the surface scan); `chests` (array of `{x,y,z, rarity?, slots?}` LOCAL offsets — multiple chests of per-chest rarity/slot-count, no surface scan; omit to keep the single auto-scanned chest). The legacy `build()/height/chestOffset` contract is still supported by the spawner for backward compatibility, but no current structure uses it.
 - **.mcstructure files live in `FF_BP/structures/ff/<name>.mcstructure`** → id `ff:<name>` (first subfolder = namespace). NO spaces in filenames. Placed at runtime via `world.structureManager.place(id, dim, originCorner, { includeEntities: false })`. `place()` anchors at the MIN corner, so the spawner offsets by half the footprint to center it. Height + footprint are read from `.size` automatically.
 - **Footprint-aware placement (v1.8.1):** each structure's bounding radius `r = ceil(max(sizeX,sizeZ) * 0.71)` is computed up front (from `.size`; legacy = `DEFAULT_FOOT_R` 22) and persisted. Spacing requires `dist ≥ r_a + r_b + STRUCT_PAD (5)`. `PLATFORM_CLEAR_RADIUS = 85` keeps footprints off the platform grid (whose gap bedrock reaches ~76.4). Ring selection is SPATIAL: walk rings inner→outer (bands 95–140 / 150–200 / 210–270 / 280–350), 16 attempts each; a packed ring overflows outward. If every ring is full it defers (no slot consumed) — the "no space but cap not reached" case. `MAX_STRUCTURES = 32` (a soft ceiling geometry may prevent reaching). No pre-clear for native placements (void + place() overwrites its own volume), so big builds don't hit the 32,768 fill cap.
 - **Chest & mobs (FF-controlled):** structures are authored BLOCKS-ONLY. After placement the spawner scans for an open surface (`findStructSurface`: solid footing below + air at spot + headroom) at the center column, then 12 nearby columns, then the roof (`findStructRoof`) as a guaranteed fallback, and places the loot chest there. **Mobs are NOT spawned at creation** (v1.8.4) — structures are far from players and Bedrock culls hostiles >128 blocks away, so build-time guards despawned instantly. Instead `spawnStructureMobs()` (proximity sweep from `gameTick`) spawns/refills guards only while a player is within `STRUCT_MOB_RADIUS`, capped at `STRUCT_MOB_CAP`, on found footing only (never over void), and non-persistent (they despawn when the player leaves). `fireproof: true` grants fire resistance so undead survive daylight while engaged. Note: script `spawnEntity` ignores light level — lit interiors do NOT block spawns.
@@ -123,7 +141,7 @@ Floating islands that spawn every 800–1600 game ticks in concentric rings arou
 
 ---
 
-## Config (CFG object in main.js)
+## Config (CFG object in config.js)
 
 | Key | Value | Notes |
 |---|---|---|
@@ -182,6 +200,6 @@ All admin commands require op (`permissionLevel >= 2`). Player `ff:vote` is open
 
 `build_template.bat` reads the version from `FF_BP/manifest.json`, syncs `FB_Template/manifest.json`, copies `FF_BP` into `FB_Template/behavior_packs/`, and zips `FB_Template/*` to `FB_v<version>.mctemplate` (Compress-Archive refuses `.mctemplate`, so it zips then renames). OUTPUT is derived dynamically — no manual edit needed on version bump. Behavior-pack folder names inside templates must be ≤10 chars (Xbox limit). The template uses `allow_random_seed: true` (no db folder), `lock_template_options: true`, and `base_game_version [1,21,0]`.
 
-## Latest Version
+## Changelog
 
-**v1.9.1** — Bug-fix + perf + maintainability patch (8 changes, no gameplay-content changes). (1) **`ff:reset` now clears `colHeightCache`** for the reset platform(s). The cache (which biases drops toward shorter columns) was never invalidated on reset, so a freshly cleared platform repiled into an inverse of its old terrain — drops avoided columns that *used* to be tall. (2) **New `ff:unassign <player|1-9>`** admin command frees a platform slot (by stored player name, so it works offline, or by number), clearing blocks/drops/cache and removing the assignment. There was previously no way to free a slot short of editing dynamic properties — a hard 9-player ceiling on long-running worlds. Deliberately manual (no auto-free on disconnect, per request). (3) **Drops persist `platformId`** (`saveDrops`/`loadDrops`, short key `p`). It was dropped on save, so after a reload the column-height bias went uniform until the cache repopulated. Old saved drops lacking `p` are harmless. (4) **Throttled drop persistence.** `stepDrops` saved the full `activeDrops` array (JSON + `setDynamicProperty`) on *every* landing tick during storms; now a `dropsDirty` flag flushes at most once per 10 ticks. (5) **Fall animation uses the script API.** New `setBlockFast()` prefers `getBlock().setType()` (far cheaper than the command parser) and falls back to `/setblock` only when `getBlock` returns undefined (high sparse subchunks above `BLIND_FALL_Y`, where the API is unreliable) — so it's strictly more robust than the old all-commands path. The `blockDropY` gravity-block placement still uses `/setblock` (one-shot, above the reliable range anyway). (6) **Staggered periodic jobs** in `gameTick`: the per-100-tick wave-save / platform-save / portal / structure work was all on `%100===0`; now spread across offsets 0/25/50/75 to avoid a periodic hitch. (7) **`computeDropRate(category, wave)`** extracted as the single source of truth for drop pacing; `applyWave` and `restoreDropRate` had identical duplicated branch trees that could silently drift. `BLACKOUT_DROP_RATE` constant replaces the repeated `999999`. (8) **Debug logging + mob-id validation.** `ff:debug on|off` toggles `state.debug`; a `logErr(ctx, e)` helper (wired into the structure-place, `fillChest`, and both mob-spawn catches) surfaces those swallowed errors to the content log when on. `validateIds()` now also checks every wave/structure mob id via `EntityTypes.get` (typo'd mob ids previously failed silently inside `spawnEntity`). Verification note: hit the documented editor/shell desync again — the bash mount was frozen at the session-start snapshot all session (editor writes never propagated), so an automated `node --check` against the live file wasn't possible; verified instead by authoritative editor read-backs of every multi-line edit (all brace-balanced). **Run `node --check FF_BP\scripts\main.js` on the Windows side before building.**
+Full version history lives in `CHANGELOG.md`. The version-bump protocol is in **Instructions** at the top of this file.
