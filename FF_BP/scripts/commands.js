@@ -1,7 +1,7 @@
 // ─── COMMANDS + VOTE + KIT ─────────────────────────────────────────────────────
 import { world, PlayerPermissionLevel } from "@minecraft/server";
 import { state, store } from "./store.js";
-import { CFG, MAX_STRUCTURES, STRUCT_RINGS, NETHER_PORTAL_TICK, END_PORTAL_TICK, TICKS_PER_DAY } from "./config.js";
+import { CFG, STRUCT_RINGS, NETHER_PORTAL_TICK, END_PORTAL_TICK, TICKS_PER_DAY } from "./config.js";
 import { WAVE_CATEGORIES, WAVE_BY_NAME, rollCategory, rollWaveInCategory, applyWave, restoreDropRate } from "./waves.js";
 import { LOOT_TIERS, spawnLootChest } from "./loot.js";
 import { isOp, isAdmin, getPlatformById, getPlayerByName, broadcast, adminMsg } from "./util.js";
@@ -284,20 +284,20 @@ export function handleCommand(player, cmd, arg, fullMsg) {
     const sub = arg.toLowerCase();
     if (sub === "spawn") {
       const typeArg = fullMsg.trim().split(/\s+/)[1]?.toLowerCase() ?? null;
-      if (store.structureState.length >= MAX_STRUCTURES) {
-        player.sendMessage(`§e[FF] Structure cap (${MAX_STRUCTURES}) reached — no more can spawn.`);
-      } else {
-        buildChallengeStructure(typeArg || undefined);
-        player.sendMessage(`§e[FF] Spawning challenge structure${typeArg ? ` (${typeArg})` : ""}...`);
-      }
+      buildChallengeStructure(typeArg || undefined);
+      player.sendMessage(`§e[FF] Spawning challenge structure${typeArg ? ` (${typeArg})` : ""}...`);
     } else {
       // List status
-      player.sendMessage(`§e[FF] Challenge Structures: ${store.structureState.length}/${MAX_STRUCTURES}`);
+      const total   = store.structureState.length;
+      const claimed = store.structureState.filter(s => s.cleared).length;
+      player.sendMessage(`§e[FF] Challenge Structures: ${total} placed§7 (${claimed} conquered)`);
       player.sendMessage(`§e[FF] Next spawn at tick ${state.nextStructureTick} (current: ${state.tick})`);
       for (const r of STRUCT_RINGS) {
         const filled = store.structureState.filter(s => s.ring === r.id).length;
         player.sendMessage(`§7  Ring ${r.id} (r${r.minRadius}-${r.maxRadius}): ${filled} placed§7`);
       }
+      const outer = store.structureState.filter(s => s.ring > STRUCT_RINGS.length).length;
+      if (outer > 0) player.sendMessage(`§7  Outer rings (${STRUCT_RINGS.length + 1}+): ${outer} placed§7`);
       const types = CHALLENGE_STRUCT_DEFS.map(s => s.type);
       player.sendMessage(`§7Types: ${types.join(", ")}`);
       player.sendMessage(`§7Usage: /scriptevent ff:structure spawn [type]`);
@@ -331,7 +331,7 @@ export function handleCommand(player, cmd, arg, fullMsg) {
 
   } else if (cmd === "help") {
     [
-      "§e--- FallingFalling v1.10.0 Commands ---",
+      "§e--- FallingFalling v1.11.0 Commands ---",
       "§f/scriptevent ff:wave <wave|category|random>",
       "§7  Categories: calm, events, storms, blackout",
       "§7  Waves: calm, gold_rush, ore_shower, meteor_strike, gravity_surge,",

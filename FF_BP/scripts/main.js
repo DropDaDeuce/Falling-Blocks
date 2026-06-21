@@ -9,8 +9,8 @@ import { world, system, BlockPermutation, ItemStack, EntityTypes } from "@minecr
 
 import { state, store } from "./store.js";
 import {
-  CFG, NETHER_PORTAL_TICK, END_PORTAL_TICK, MAX_STRUCTURES,
-  STRUCT_SPAWN_MIN, STRUCT_SPAWN_MAX, STRUCT_MOB_CHECK, GRAVITY_BLOCKS,
+  CFG, NETHER_PORTAL_TICK, END_PORTAL_TICK,
+  STRUCT_FIRST_SPAWN, STRUCT_SPAWN_INTERVAL, STRUCT_MOB_CHECK, GRAVITY_BLOCKS,
 } from "./config.js";
 import { PHASE_ORDER } from "./phase.js";
 import {
@@ -174,15 +174,14 @@ function gameTick() {
     }
   }
 
-  // Challenge structure spawning — checked once per 100-tick cycle (offset 75)
-  if (state.tick % 100 === 75 && store.structureState.length < MAX_STRUCTURES) {
+  // Challenge structure spawning — one per in-game day, no cap (offset 75).
+  if (state.tick % 100 === 75) {
     if (state.nextStructureTick === 0) {
-      // First run: schedule the initial spawn (stagger by half a cycle so it doesn't
-      // fire the instant the game starts)
-      state.nextStructureTick = state.tick + rand(STRUCT_SPAWN_MIN, STRUCT_SPAWN_MAX);
+      // First run: seed the first spawn one full day in (≈ start of day 2).
+      state.nextStructureTick = STRUCT_FIRST_SPAWN;
     } else if (state.tick >= state.nextStructureTick) {
       buildChallengeStructure();
-      state.nextStructureTick = state.tick + rand(STRUCT_SPAWN_MIN, STRUCT_SPAWN_MAX);
+      state.nextStructureTick = state.tick + STRUCT_SPAWN_INTERVAL;
       saveWaveState();
     }
   }

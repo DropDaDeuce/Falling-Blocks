@@ -7,7 +7,8 @@ import { world, system } from "@minecraft/server";
 import { state, store } from "./store.js";
 import {
   CFG, STRUCT_RINGS, STRUCT_PAD, PLATFORM_CLEAR_RADIUS, DEFAULT_FOOT_R,
-  MAX_STRUCTURES, STRUCT_MOB_RADIUS, STRUCT_MOB_CAP, STRUCT_MOB_COOLDOWN,
+  STRUCT_BAND_WIDTH, STRUCT_BAND_GAP, STRUCT_MAX_BANDS,
+  STRUCT_MOB_RADIUS, STRUCT_MOB_CAP, STRUCT_MOB_COOLDOWN,
   DEFAULT_STRUCT_WEIGHT, CHEST_PROBE_OFFSETS,
 } from "./config.js";
 import { PHASE_ORDER, lootPhase } from "./phase.js";
@@ -93,8 +94,6 @@ export function getStructSize(def) {
 
 // ─── Main structure spawner ───────────────────────────────────────────────────
 export function buildChallengeStructure(forcedType) {
-  if (store.structureState.length >= MAX_STRUCTURES) return;
-
   const phase  = lootPhase();
   const avail  = CHALLENGE_STRUCT_DEFS.filter(s =>
     !s.minPhase || PHASE_ORDER.indexOf(phase) >= PHASE_ORDER.indexOf(s.minPhase)
@@ -120,11 +119,24 @@ export function buildChallengeStructure(forcedType) {
   // angle/radius candidates. Reject any candidate that (a) would bring the footprint
   // closer than PLATFORM_CLEAR_RADIUS to world center, or (b) comes within
   // footR + other.r + STRUCT_PAD of an existing structure. The first ring with room
-  // wins; a packed inner ring naturally overflows outward. If EVERY ring is full we
-  // defer (no slot consumed) — that's the "no space but cap not reached" case.
+  // wins; a packed inner ring naturally overflows outward.
+  //
+  // v1.11.0: spawning never stops. After the seed rings are exhausted we GENERATE new
+  // outward bands (width STRUCT_BAND_WIDTH, separated by STRUCT_BAND_GAP) and keep
+  // going until a slot is found. STRUCT_MAX_BANDS only bounds this single search so it
+  // can't infinite-loop on a degenerate world; it's not a structure cap.
+  const lastSeed = STRUCT_RINGS[STRUCT_RINGS.length - 1];
   let scx, scz, sy, ringId;
   let placed = false;
-  for (const ring of STRUCT_RINGS) {
+  for (let ri = 0; ri < STRUCT_RINGS.length + STRUCT_MAX_BANDS && !placed; ri++) {
+    let ring;
+    if (ri < STRUCT_RINGS.length) {
+      ring = STRUCT_RINGS[ri];
+    } else {
+      const k    = ri - STRUCT_RINGS.length;   // 0-based generated band
+      const minR = lastSeed.maxRadius + STRUCT_BAND_GAP + k * (STRUCT_BAND_WIDTH + STRUCT_BAND_GAP);
+      ring = { id: STRUCT_RINGS.length + k + 1, minRadius: minR, maxRadius: minR + STRUCT_BAND_WIDTH };
+    }
     for (let attempt = 0; attempt < 16; attempt++) {
       const angle  = Math.random() * Math.PI * 2;
       const radius = rand(ring.minRadius, ring.maxRadius);
@@ -141,11 +153,10 @@ export function buildChallengeStructure(forcedType) {
         placed = true; break;
       }
     }
-    if (placed) break;
   }
   if (!placed) {
-    adminMsg(`§8[FF-OP] Structure spawn deferred — no free space (${store.structureState.length}/${MAX_STRUCTURES} placed)`);
-    return; // every ring spatially packed; retry next scheduled spawn
+    adminMsg(`§8[FF-OP] Structure spawn deferred — no slot within ${STRUCT_MAX_BANDS} expansion bands (${store.structureState.length} placed)`);
+    return; // retry next scheduled spawn
   }
 
   // Placement found — commit the pity update now (chosen -> 0, others climb). The only
@@ -196,7 +207,10 @@ export function buildChallengeStructure(forcedType) {
     }
 
     // Persist immediately — the structure is placed; chest/mobs settle just after.
-    store.structureState.push({ x: scx, y: sy, z: scz, type: def.type, tick: state.tick, ring: ringId, r: footR, h: structH });
+    // Keep a reference to the record so chestCoords can be attached once the chests
+    // are placed (used by the claim-on-loot system in spawnStructureMobs).
+    const rec = { x: scx, y: sy, z: scz, type: def.type, tick: state.tick, ring: ringId, r: footR, h: structH };
+    store.structureState.push(rec);
     saveStructureState();
 
     // Announce spawn
@@ -205,10 +219,7 @@ export function buildChallengeStructure(forcedType) {
       tierName === "rare"     ? "§6★ Rare"     :
       tierName === "uncommon" ? "§bUncommon"   : "§7Common";
     broadcast(`§e[FF] §l⚔ ${def.label}§r §e(Ring ${ringId}) at §f(${scx}, ${sy}, ${scz})§e — ${tierLabel} §eloot inside!`);
-    adminMsg(`§8[FF-OP] Structure: ${def.type} ring=${ringId} r=${footR} at (${scx}, ${sy}, ${scz}) tier=${tierName} total=${store.structureState.length}/${MAX_STRUCTURES}`);
-    if (store.structureState.length >= MAX_STRUCTURES) {
-      broadcast(`§6[FF] §lAll ${MAX_STRUCTURES} challenge structures have been discovered!`);
-    }
+    adminMsg(`§8[FF-OP] Structure: ${def.type} ring=${ringId} r=${footR} at (${scx}, ${sy}, ${scz}) tier=${tierName} total=${store.structureState.length}`);
 
     // Let the build settle one beat, then place the chest on a real surface, fill it,
     // and drop the ticking area. Mobs are NOT spawned here — they're spawned lazily by
@@ -253,6 +264,12 @@ export function buildChallengeStructure(forcedType) {
         planned.push({ x: chestX, y: chestY, z: chestZ, tier, slots: undefined });
       }
 
+      // Record the loot-chest coords on the persisted structure. The claim-on-loot
+      // system (spawnStructureMobs) watches these: once every one is destroyed the
+      // structure goes dormant so a player can clear it and move in as a base.
+      rec.chestCoords = planned.map(p => ({ x: p.x, y: p.y, z: p.z }));
+      saveStructureState();
+
       // ── Loot + cleanup. Fill once chests are settled, then drop the ticking area.
       system.runTimeout(() => {
         for (const pc of planned) {
@@ -283,6 +300,7 @@ export function spawnStructureMobs() {
   const R2    = STRUCT_MOB_RADIUS * STRUCT_MOB_RADIUS;
 
   for (const s of store.structureState) {
+    if (s.cleared) continue;                     // conquered — dormant, no more guards
     const cy = s.y + 6;                          // rough island mid for distance + scan
     // Nearest player (3D). Skip the whole structure if no one is close.
     let near = Infinity;
@@ -298,6 +316,26 @@ export function spawnStructureMobs() {
     const key = `${s.x},${s.y},${s.z}`;
     if (state.tick - (structMobTimers[key] ?? -99999) < STRUCT_MOB_COOLDOWN) continue;
     structMobTimers[key] = state.tick;
+
+    // Claim-on-loot: once a player has destroyed EVERY loot chest, the structure is
+    // conquered — flag it dormant (persisted) so it never spawns guards again, leaving
+    // it free to use as a base. The chunk is loaded here (a player is within range), so
+    // getBlock is reliable; an undefined read (partial load) is treated as "still there"
+    // to avoid a false claim. Legacy records without chestCoords are never auto-claimed.
+    if (Array.isArray(s.chestCoords) && s.chestCoords.length) {
+      let anyChest = false;
+      for (const c of s.chestCoords) {
+        let b;
+        try { b = dim.getBlock({ x: c.x, y: c.y, z: c.z }); } catch(_) { b = undefined; }
+        if (b === undefined || b.typeId === "minecraft:chest") { anyChest = true; break; }
+      }
+      if (!anyChest) {
+        s.cleared = true;
+        saveStructureState();
+        broadcast(`§a[FF] §lA challenge structure at §f(${s.x}, ${s.y}, ${s.z})§a has been conquered — it's yours to claim!`);
+        continue;
+      }
+    }
 
     const def = CHALLENGE_STRUCT_DEFS.find(d => d.type === s.type);
     if (!def || !def.mobs) continue;

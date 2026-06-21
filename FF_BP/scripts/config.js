@@ -77,21 +77,35 @@ export const PASS_THROUGH = new Set([
 export const EDGE_INSET_BLOCKS = new Set(["minecraft:ice"]);
 
 // ─── CHALLENGE STRUCTURE TUNABLES ──────────────────────────────────────────────
-// Spawn interval: 800-1600 game ticks (~2.7-5.3 min) between spawns.
-export const STRUCT_SPAWN_MIN = 800;
-export const STRUCT_SPAWN_MAX = 1600;
+// Spawn cadence (v1.11.0): ONE structure per in-game day. TICKS_PER_DAY = 6000
+// state-ticks. The first structure spawns after one full day has elapsed
+// (STRUCT_FIRST_SPAWN ≈ start of day 2), then one every STRUCT_SPAWN_INTERVAL.
+export const STRUCT_FIRST_SPAWN    = TICKS_PER_DAY;   // tick 6000 — after day 1
+export const STRUCT_SPAWN_INTERVAL = TICKS_PER_DAY;   // one per in-game day
 
 // id: used for persistence + reporting. minRadius/maxRadius: XZ distance from world
 // center (0,0). Rings no longer carry a count capacity — placement is now SPATIAL
 // (v1.8.1): a structure goes in the innermost ring it physically fits, overflowing
 // outward when an inner band is packed. Bands widened in v1.8.1 because .mcstructure
 // builds can be much larger than the old hand-built ±13 footprints.
+// These four are the SEED rings; when all of them are packed the spawner generates
+// further outward bands on the fly (v1.11.0) so spawning never stops — see
+// STRUCT_BAND_WIDTH / STRUCT_BAND_GAP / STRUCT_MAX_BANDS below.
 export const STRUCT_RINGS = [
   { id: 1, minRadius:  95, maxRadius: 140 },
   { id: 2, minRadius: 150, maxRadius: 200 },
   { id: 3, minRadius: 210, maxRadius: 270 },
   { id: 4, minRadius: 280, maxRadius: 350 },
 ];
+
+// Auto-expanding outer rings (v1.11.0). Once the seed rings are full the spawner
+// keeps appending bands of STRUCT_BAND_WIDTH (with STRUCT_BAND_GAP between bands)
+// outward from the last seed ring until a free slot is found. STRUCT_MAX_BANDS only
+// bounds the search WITHIN A SINGLE spawn attempt (so it can't infinite-loop); it is
+// NOT a structure cap — there is no cap on total structures.
+export const STRUCT_BAND_WIDTH = 70;
+export const STRUCT_BAND_GAP   = 10;
+export const STRUCT_MAX_BANDS  = 256;
 
 // Placement tunables (v1.8.1, footprint-aware):
 //   STRUCT_PAD            walkable gap left between two structure footprints.
@@ -106,9 +120,9 @@ export const STRUCT_PAD            = 5;
 export const PLATFORM_CLEAR_RADIUS = 85;
 export const DEFAULT_FOOT_R        = 22;
 
-// Hard total cap. Geometry may prevent reaching it if the world is packed with very
-// large structures — that's intentional; the spawner just defers when there's no room.
-export const MAX_STRUCTURES = 32;
+// No total cap (v1.11.0): structures spawn indefinitely, one per in-game day, with
+// outward-expanding rings. Persisted state in ff:structures grows ~80 bytes per
+// structure (a few hundred KB after years of in-game days) — large but finite.
 
 // Proximity mob spawning (v1.8.4). Structure guards spawn ONLY while a player is
 // within STRUCT_MOB_RADIUS, refilling toward STRUCT_MOB_CAP at most once every
